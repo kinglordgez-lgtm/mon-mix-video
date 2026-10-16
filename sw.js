@@ -1,5 +1,5 @@
-// MON MIX VIDEO V1.2.3 — réseau prioritaire pour le code, secours hors ligne.
-const CACHE='mon-mix-v123';
+// MON MIX VIDEO V1.2.4 — réseau prioritaire pour le code, secours hors ligne.
+const CACHE='mon-mix-v124';
 const ASSETS=['./','./index.html','./app.js','./manifest.webmanifest','./icon.png','./icon-512.png'];
 self.addEventListener('install',event=>{event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS.map(p=>new Request(p,{cache:'reload'})))));self.skipWaiting()});
 self.addEventListener('activate',event=>{event.waitUntil((async()=>{const keys=await caches.keys();await Promise.all(keys.filter(k=>k.startsWith('mon-mix-')&&k!==CACHE).map(k=>caches.delete(k)));await self.clients.claim()})())});
