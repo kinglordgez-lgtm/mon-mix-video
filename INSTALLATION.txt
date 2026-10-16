@@ -1,0 +1,22 @@
+MON MIX VIDEO — INSTALLATION SUR IPHONE
+
+IMPORTANT : iOS ne permet pas de lancer une PWA installable directement depuis un fichier HTML local. Les fichiers doivent être hébergés sur un site HTTPS. GitHub Pages gratuit convient.
+
+1. Sur github.com, créez un dépôt public, par exemple mon-mix-video.
+2. Téléversez à la racine les six fichiers : index.html, app.js, manifest.webmanifest, sw.js, icon.png, icon-512.png.
+3. Dans Settings > Pages > Build and deployment, choisissez Deploy from a branch, main, / (root), puis Save.
+4. Attendez la publication, puis ouvrez https://VOTRE-IDENTIFIANT.github.io/mon-mix-video/ dans SAFARI sur iPhone.
+5. Touchez Partager > Sur l'écran d'accueil > Ajouter.
+6. Lancez MON MIX VIDEO depuis son icône, puis Choisir dans Fichiers / iCloud.
+
+UTILISATION :
+- Lecture aléatoire : Lancer le mélange, puis Suivante pour passer un clip.
+- Montage : sélectionner durée et style, puis Créer un montage. Laisser l'application au premier plan pendant toute la durée du montage.
+- Enregistrement : bouton Enregistrer le montage, puis partage/enregistrement dans Fichiers.
+
+LIMITES V1 :
+- Les fichiers sélectionnés ne persistent pas après fermeture complète : re-sélection nécessaire.
+- Export sans audio ; la case son est indicative et non implémentée dans cette V1.
+- Export dépend de MediaRecorder et captureStream sur la version iOS/Safari. Le format MP4 n'est pas garanti ; certains iPhone peuvent produire WebM ou ne pas exporter du tout.
+- Les montages longs, les MOV HEVC et les fichiers volumineux peuvent échouer ; commencer avec 3 MP4/H.264 et 30 secondes.
+- L'enregistrement est réalisé en temps réel, pas accéléré. Aucun fichier n'est envoyé à un serveur par le code de l'application.
