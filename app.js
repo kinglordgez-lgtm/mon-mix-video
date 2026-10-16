@@ -22,13 +22,13 @@ function nextItem(){if(!queue.length){queue=shuffle(items);if(items.length>1&&qu
 function showNext(item,kind,token){
  if(token!==playbackGeneration||!playing)return;
  const v=$('player'),overlay=$('playback-transition');
- current=item;v.src=item.url;$('now').textContent='Lecture : '+item.file.name;
- const enter={fade:'scale(1)',flash:'scale(1)', 'slide-left':'translateX(12%)','slide-right':'translateX(-12%)',zoom:'scale(1.16)',spin:'rotate(3deg) scale(1.08)'};
+ current=item;v.pause();v.src=item.url;$('now').textContent='Lecture : '+item.file.name;
+ const enter={fade:'scale(1)',flash:'scale(1)', 'slide-left':'translateX(100%)','slide-right':'translateX(-100%)',zoom:'scale(1.6)',spin:'rotate(28deg) scale(.65)'};
  v.style.setProperty('--mix-enter-transform',enter[kind]||'scale(1)');
- v.classList.remove('mix-leave');void v.offsetWidth;v.classList.add('mix-enter');
- if(overlay){overlay.className='playback-transition mix-'+kind;overlay.style.opacity='0'}
+ v.classList.remove('mix-leave','mix-enter');void v.offsetWidth;v.classList.add('mix-enter');
+ if(overlay){overlay.className='playback-transition mix-'+kind;overlay.style.opacity='1';void overlay.offsetWidth;overlay.style.opacity='0'}
  v.play().catch(()=>{$('now').textContent+=' — touche Lecture sur la vidéo pour démarrer.'});
- playbackTimer=setTimeout(()=>{if(token===playbackGeneration){v.classList.remove('mix-enter');if(overlay)overlay.className='playback-transition';playbackTimer=null}},700);
+ playbackTimer=setTimeout(()=>{if(token===playbackGeneration){v.classList.remove('mix-enter');if(overlay)overlay.className='playback-transition';playbackTimer=null}},1050);
 }
 function next(){
  if(!items.length){$('now').textContent='Importe d’abord des vidéos.';return}
@@ -36,8 +36,8 @@ function next(){
  const item=nextItem();const kind=playbackTransitions[Math.floor(Math.random()*playbackTransitions.length)];
  if(!playing||!v.currentSrc||v.ended||v.readyState<2){showNext(item,kind,token);return}
  v.classList.add('mix-leave');
- const overlay=$('playback-transition');if(overlay){overlay.className='playback-transition mix-'+kind;overlay.style.opacity=kind==='flash'?'0.9':'0.42'}
- playbackTimer=setTimeout(()=>{playbackTimer=null;showNext(item,kind,token)},190);
+ const overlay=$('playback-transition');if(overlay){overlay.className='playback-transition mix-'+kind;overlay.style.opacity='1'}
+ playbackTimer=setTimeout(()=>{playbackTimer=null;showNext(item,kind,token)},330);
 }
 $('play').onclick=()=>{playing=true;if(!$('player').src)next();else $('player').play().catch(()=>next())};
 $('next').onclick=()=>{playing=true;next()};
