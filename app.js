@@ -1,5 +1,8 @@
 'use strict';
 const $=id=>document.getElementById(id);
+// Lecture sans contrôles natifs ni son, y compris après échange des lecteurs.
+function configurePlayback(v){v.controls=false;v.muted=true;v.defaultMuted=true;v.playsInline=true;v.setAttribute('playsinline','');v.setAttribute('webkit-playsinline','');v.disablePictureInPicture=true;}
+
 let items=[],queue=[],current=null,playing=false,rendering=false,cancelled=false,recorder=null,exportURL=null;
 const urls=new Set();
 function status(s){$('exportstatus').textContent=s}
@@ -12,7 +15,7 @@ function standbyVideo(){return $('player-next')}
 function resetPlaybackTransition(){
  transitionToken++;transitionBusy=false;
  if(transitionTimeout){clearTimeout(transitionTimeout);transitionTimeout=null}
- const a=activeVideo(),b=standbyVideo();
+ const a=activeVideo(),b=standbyVideo();configurePlayback(a);configurePlayback(b);
  for(const v of [a,b]){v.classList.remove('mix-in','mix-out');v.style.removeProperty('--mix-start');v.style.removeProperty('clip-path');v.style.removeProperty('transition');v.style.removeProperty('transform');v.style.removeProperty('opacity')}
  b.pause();b.removeAttribute('src');b.load();b.style.opacity='0';b.style.pointerEvents='none';
  a.style.opacity='1';a.style.pointerEvents='auto';
@@ -27,7 +30,7 @@ function commitSwap(oldV,newV,item,token){
  oldV.id='player-next';newV.id='player';
  oldV.className='mix-video standby';newV.className='mix-video';
  oldV.style.cssText='opacity:0;pointer-events:none';newV.style.cssText='opacity:1;pointer-events:auto';
- current=item;transitionBusy=false;transitionTimeout=null;
+ configurePlayback(newV);configurePlayback(oldV);current=item;transitionBusy=false;transitionTimeout=null;
  $('now').textContent='Lecture : '+item.file.name;
 }
 async function next(){
@@ -36,7 +39,7 @@ async function next(){
  if(transitionTimeout){clearTimeout(transitionTimeout);transitionTimeout=null}
  transitionBusy=true;
  const oldV=activeVideo(),newV=standbyVideo(),item=nextItem();
- newV.pause();newV.src=item.url;newV.muted=true;newV.playsInline=true;
+ newV.pause();newV.src=item.url;newV.muted=true;newV.playsInline=true;newV.controls=false;
  const kind=transitions[Math.floor(Math.random()*transitions.length)];
  $('now').textContent='Préparation de la transition '+kind+'…';
  const ready=await new Promise(resolve=>{
@@ -70,10 +73,24 @@ async function next(){
 $('play').onclick=()=>{playing=true;if(!activeVideo().src)next();else activeVideo().play().catch(()=>next())};
 $('next').onclick=()=>{playing=true;next()};
 $('stop').onclick=()=>{playing=false;resetPlaybackTransition();activeVideo().pause()};
-for(const v of [activeVideo(),standbyVideo()]){
+for(const v of [activeVideo(),standbyVideo()]){configurePlayback(v);
  v.addEventListener('ended',()=>{if(playing&&!transitionBusy&&v===activeVideo())next()});
  v.addEventListener('error',()=>{if(playing&&!transitionBusy&&v===activeVideo()){$('now').textContent='Impossible de lire ce fichier. Appuie sur Suivante.'}});
 }
+
+let cinemaMode=false;
+function setCinema(on){
+ cinemaMode=!!on;
+ document.body.classList.toggle('cinema-on',cinemaMode);
+ $('cinema').setAttribute('aria-pressed',String(cinemaMode));
+ $('cinema').textContent=cinemaMode?'▣ Quitter le plein écran':'⛶ Plein écran sans commandes';
+ $('cinema-help').hidden=!cinemaMode;
+ for(const v of [activeVideo(),standbyVideo()])configurePlayback(v);
+}
+$('cinema').onclick=()=>{setCinema(!cinemaMode);if(cinemaMode){playing=true;if(!activeVideo().src)next();else activeVideo().play().catch(()=>{$('now').textContent='Lecture bloquée par iOS : touche Lancer le mélange.'})}};
+$('cinema-exit').onclick=()=>setCinema(false);
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&cinemaMode)setCinema(false)});
+
 $('duration').onchange=()=>$('customwrap').hidden=$('duration').value!=='custom';
 function metadata(item){return new Promise((resolve,reject)=>{const v=document.createElement('video');v.preload='metadata';v.playsInline=true;const t=setTimeout(()=>finish(new Error('Métadonnées indisponibles')),12000);function finish(err){clearTimeout(t);v.removeAttribute('src');v.load();err?reject(err):resolve(d)}let d;v.onloadedmetadata=()=>{d={...item,duration:v.duration,width:v.videoWidth,height:v.videoHeight};if(!Number.isFinite(d.duration)||d.duration<=0)finish(new Error('Durée vidéo inconnue'));else finish()};v.onerror=()=>finish(new Error('Format non lisible'));v.src=item.url})}
 function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
