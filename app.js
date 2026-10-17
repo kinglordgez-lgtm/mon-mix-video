@@ -138,18 +138,20 @@ for(const v of [activeVideo(),standbyVideo()]){configurePlayback(v);
  v.addEventListener('error',()=>{if(playing&&!transitionBusy&&v===activeVideo()){$('now').textContent='Impossible de lire ce fichier. Appuie sur Suivante.'}});
 }
 
-let cinemaMode=false;
-function setCinema(on){
- cinemaMode=!!on;
- document.body.classList.toggle('cinema-on',cinemaMode);
- $('cinema').setAttribute('aria-pressed',String(cinemaMode));
- $('cinema').textContent=cinemaMode?'▣ Quitter le plein écran':'⛶ Plein écran sans commandes';
- $('cinema-help').hidden=!cinemaMode;
- for(const v of [activeVideo(),standbyVideo()])configurePlayback(v);
+// Un simple affichage plein écran du même lecteur : aucun mode vidéo séparé.
+let fullscreenOn=false;
+function setFullscreen(on){
+ fullscreenOn=Boolean(on);
+ document.body.classList.toggle('fullscreen-on',fullscreenOn);
+ const btn=$('fullscreen-toggle');
+ btn.textContent=fullscreenOn?'✕ Réduire':'⛶ Plein écran';
+ btn.setAttribute('aria-pressed',String(fullscreenOn));
+ btn.setAttribute('aria-label',fullscreenOn?'Quitter le plein écran':'Passer en plein écran');
+ // Recalculer chaque cadrage sur son lecteur, y compris après les échanges.
+ syncPlaybackCrops();
 }
-$('cinema').onclick=()=>{setCinema(!cinemaMode);if(cinemaMode){playing=true;if(!activeVideo().src)next();else activeVideo().play().catch(()=>{$('now').textContent='Lecture bloquée par iOS : touche Lancer le mélange.'})}};
-$('cinema-exit').onclick=()=>setCinema(false);
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&cinemaMode)setCinema(false)});
+$('fullscreen-toggle').onclick=()=>setFullscreen(!fullscreenOn);
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&fullscreenOn)setFullscreen(false)});
 
 $('duration').onchange=()=>$('customwrap').hidden=$('duration').value!=='custom';
 function metadata(item){return new Promise((resolve,reject)=>{const v=document.createElement('video');v.preload='metadata';v.playsInline=true;const t=setTimeout(()=>finish(new Error('Métadonnées indisponibles')),12000);function finish(err){clearTimeout(t);v.removeAttribute('src');v.load();err?reject(err):resolve(d)}let d;v.onloadedmetadata=()=>{d={...item,duration:v.duration,width:v.videoWidth,height:v.videoHeight};item.format=d.width>d.height*1.12?'Horizontal':d.height>d.width*1.12?'Vertical':'Carré';if(cropEditing===item.id)showCropEditor();if(!Number.isFinite(d.duration)||d.duration<=0)finish(new Error('Durée vidéo inconnue'));else finish()};v.onerror=()=>finish(new Error('Format non lisible'));v.src=item.url})}
