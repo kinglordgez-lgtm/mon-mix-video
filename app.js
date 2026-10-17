@@ -3,20 +3,52 @@ const $=id=>document.getElementById(id);
 // Lecture sans contrôles natifs ni son, y compris après échange des lecteurs.
 function configurePlayback(v){v.controls=false;v.muted=true;v.defaultMuted=true;v.playsInline=true;v.setAttribute('playsinline','');v.setAttribute('webkit-playsinline','');v.disablePictureInPicture=true;}
 
-// Recadrage commun à la lecture et au rendu exporté. Aucun traitement distant.
+// V1.2.8 : cadrage par fichier, sans stockage des vidéos ni envoi réseau.
+// Le cadrage par défaut sert aux fichiers ajoutés ensuite.
 let cropZoom=1,cropVertical=.5;
-function updateCrop(){
- cropZoom=Number($('cropzoom').value)/100;
- cropVertical=Number($('cropvertical').value)/100;
- $('cropzoom-label').textContent=cropZoom.toFixed(2).replace('.',',')+'×';
- $('cropvertical-label').textContent=Math.round(cropVertical*100)+' %';
- const stage=$('playback-stage');
- stage.style.setProperty('--crop-zoom',String(cropZoom));
- stage.style.setProperty('--crop-position',String(cropVertical*100)+'%');
+let cropDefaults={zoom:1,vertical:.5};
+let cropEditing=null;
+const clipOwners=new WeakMap();
+function settings(item){return item?.crop||cropDefaults}
+function applyCropToVideo(v,item){
+ const s=settings(item),z=s.zoom,p=s.vertical;
+ // Dimensions physiques (et non CSS scale) pour préserver le cadrage en mode Cinéma iOS.
+ v.style.setProperty('--crop-zoom',String(z));
+ v.style.setProperty('--crop-position',String(p*100)+'%');
+ v.style.setProperty('--crop-left',((1-z)*50)+'%');v.style.setProperty('--crop-top',((1-z)*p*100)+'%');
+ v.style.setProperty('--crop-width',(z*100)+'%');v.style.setProperty('--crop-height',(z*100)+'%');
 }
+function syncPlaybackCrops(){
+ for(const v of [activeVideo(),standbyVideo()])applyCropToVideo(v,clipOwners.get(v));
+}
+function showCropEditor(){
+ const item=items.find(x=>x.id===cropEditing);
+ const s=settings(item);
+ $('cropzoom').value=Math.round(s.zoom*100/5)*5;
+ $('cropvertical').value=Math.round(s.vertical*100/5)*5;
+ $('cropzoom-label').textContent=s.zoom.toFixed(2).replace('.',',')+'×';
+ $('cropvertical-label').textContent=Math.round(s.vertical*100)+' %';
+ $('crop-info').textContent=item?(item.format||'Format en cours de lecture')+' — '+item.file.name:'Ces valeurs seront utilisées pour les prochaines vidéos importées.';
+}
+function updateCrop(){
+ const item=items.find(x=>x.id===cropEditing);
+ const s=item?item.crop:cropDefaults;
+ s.zoom=Number($('cropzoom').value)/100;
+ s.vertical=Number($('cropvertical').value)/100;
+ cropZoom=s.zoom;cropVertical=s.vertical;
+ showCropEditor();syncPlaybackCrops();
+}
+$('crop-target').addEventListener('change',()=>{cropEditing=$('crop-target').value||null;showCropEditor()});
 $('cropzoom').addEventListener('input',updateCrop);
 $('cropvertical').addEventListener('input',updateCrop);
-updateCrop();
+let nextClipId=0;
+function refreshCropList(){
+ const select=$('crop-target'),keep=cropEditing;
+ select.replaceChildren(new Option('Réglages par défaut (nouvelles vidéos)',''),...items.map(x=>new Option(x.file.name,x.id)));
+ if(keep&&items.some(x=>x.id===keep))select.value=keep;
+ else{cropEditing=items[0]?.id||null;select.value=cropEditing||''}
+ showCropEditor();
+}
 let items=[],queue=[],current=null,playing=false,rendering=false,cancelled=false,recorder=null,exportURL=null;
 const urls=new Set();
 function status(s){$('exportstatus').textContent=s}
@@ -31,11 +63,11 @@ function resetPlaybackTransition(){
  if(transitionTimeout){clearTimeout(transitionTimeout);transitionTimeout=null}
  const a=activeVideo(),b=standbyVideo();configurePlayback(a);configurePlayback(b);
  for(const v of [a,b]){v.classList.remove('mix-in','mix-out');v.style.removeProperty('--mix-start');v.style.removeProperty('clip-path');v.style.removeProperty('transition');v.style.removeProperty('transform');v.style.removeProperty('opacity')}
- b.pause();b.removeAttribute('src');b.load();b.style.opacity='0';b.style.pointerEvents='none';
+ clipOwners.delete(b);b.pause();b.removeAttribute('src');b.load();b.style.opacity='0';b.style.pointerEvents='none';
  a.style.opacity='1';a.style.pointerEvents='auto';
 }
-function cleanup(){resetPlaybackTransition();for(const u of urls)URL.revokeObjectURL(u);urls.clear();items=[];queue=[];current=null;playing=false;const v=activeVideo();v.pause();v.removeAttribute('src');v.load();$('count').textContent='Aucune vidéo sélectionnée';$('list').replaceChildren();$('now').textContent='En attente de vidéos'}
-$('files').addEventListener('change',e=>{const incoming=[...e.target.files].filter(f=>f.type.startsWith('video/')||/\.(mov|mp4|m4v)$/i.test(f.name));if(!incoming.length)return;for(const f of incoming){const url=URL.createObjectURL(f);urls.add(url);items.push({file:f,url})}$('count').textContent=`${items.length} vidéo(s) sélectionnée(s)`;$('list').replaceChildren(...items.map(x=>{const li=document.createElement('li');li.textContent=x.file.name;return li}));e.target.value='';});
+function cleanup(){resetPlaybackTransition();for(const u of urls)URL.revokeObjectURL(u);urls.clear();items=[];queue=[];current=null;playing=false;cropEditing=null;refreshCropList();const v=activeVideo();v.pause();v.removeAttribute('src');v.load();$('count').textContent='Aucune vidéo sélectionnée';$('list').replaceChildren();$('now').textContent='En attente de vidéos'}
+$('files').addEventListener('change',e=>{const incoming=[...e.target.files].filter(f=>f.type.startsWith('video/')||/\.(mov|mp4|m4v)$/i.test(f.name));if(!incoming.length)return;for(const f of incoming){const url=URL.createObjectURL(f);urls.add(url);items.push({id:String(++nextClipId),file:f,url,crop:{...cropDefaults},format:"Format en attente"})}$('count').textContent=`${items.length} vidéo(s) sélectionnée(s)`;$('list').replaceChildren(...items.map(x=>{const li=document.createElement('li');li.textContent=x.file.name;return li}));refreshCropList();e.target.value='';});
 $('clear').onclick=()=>{if(rendering)return;playing=false;cleanup()};
 function nextItem(){if(!queue.length){queue=shuffle(items);if(items.length>1&&queue[0]===current)[queue[0],queue[1]]=[queue[1],queue[0]]}return queue.shift()}
 function commitSwap(oldV,newV,item,token){
@@ -44,8 +76,8 @@ function commitSwap(oldV,newV,item,token){
  oldV.id='player-next';newV.id='player';
  oldV.className='mix-video standby';newV.className='mix-video';
  oldV.style.cssText='opacity:0;pointer-events:none';newV.style.cssText='opacity:1;pointer-events:auto';
- configurePlayback(newV);configurePlayback(oldV);current=item;transitionBusy=false;transitionTimeout=null;
- $('now').textContent='Lecture : '+item.file.name;
+ configurePlayback(newV);configurePlayback(oldV);clipOwners.set(newV,item);clipOwners.delete(oldV);applyCropToVideo(newV,item);current=item;transitionBusy=false;transitionTimeout=null;
+ $('now').textContent='Lecture : '+item.file.name;cropEditing=item.id;$('crop-target').value=item.id;showCropEditor();
 }
 async function next(){
  if(!items.length){$('now').textContent='Importe d’abord des vidéos.';return}
@@ -53,7 +85,7 @@ async function next(){
  if(transitionTimeout){clearTimeout(transitionTimeout);transitionTimeout=null}
  transitionBusy=true;
  const oldV=activeVideo(),newV=standbyVideo(),item=nextItem();
- newV.pause();newV.src=item.url;newV.muted=true;newV.playsInline=true;newV.controls=false;
+ newV.pause();clipOwners.set(newV,item);applyCropToVideo(newV,item);newV.src=item.url;newV.muted=true;newV.playsInline=true;newV.controls=false;
  const kind=transitions[Math.floor(Math.random()*transitions.length)];
  $('now').textContent='Préparation de la transition '+kind+'…';
  const ready=await new Promise(resolve=>{
@@ -64,6 +96,7 @@ async function next(){
   newV.addEventListener('loadeddata',onReady);newV.addEventListener('error',onError);
  });
  if(token!==transitionToken)return;
+ if(newV.videoWidth&&newV.videoHeight){item.format=newV.videoWidth>newV.videoHeight*1.12?'Horizontal':newV.videoHeight>newV.videoWidth*1.12?'Vertical':'Carré';if(cropEditing===item.id)showCropEditor()}
  if(!ready){newV.pause();newV.removeAttribute('src');newV.load();transitionBusy=false;$('now').textContent='Vidéo indisponible : '+item.file.name+' — essaie Suivante';return}
  try{
   await newV.play();
@@ -119,15 +152,16 @@ $('cinema-exit').onclick=()=>setCinema(false);
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&cinemaMode)setCinema(false)});
 
 $('duration').onchange=()=>$('customwrap').hidden=$('duration').value!=='custom';
-function metadata(item){return new Promise((resolve,reject)=>{const v=document.createElement('video');v.preload='metadata';v.playsInline=true;const t=setTimeout(()=>finish(new Error('Métadonnées indisponibles')),12000);function finish(err){clearTimeout(t);v.removeAttribute('src');v.load();err?reject(err):resolve(d)}let d;v.onloadedmetadata=()=>{d={...item,duration:v.duration,width:v.videoWidth,height:v.videoHeight};if(!Number.isFinite(d.duration)||d.duration<=0)finish(new Error('Durée vidéo inconnue'));else finish()};v.onerror=()=>finish(new Error('Format non lisible'));v.src=item.url})}
+function metadata(item){return new Promise((resolve,reject)=>{const v=document.createElement('video');v.preload='metadata';v.playsInline=true;const t=setTimeout(()=>finish(new Error('Métadonnées indisponibles')),12000);function finish(err){clearTimeout(t);v.removeAttribute('src');v.load();err?reject(err):resolve(d)}let d;v.onloadedmetadata=()=>{d={...item,duration:v.duration,width:v.videoWidth,height:v.videoHeight};item.format=d.width>d.height*1.12?'Horizontal':d.height>d.width*1.12?'Vertical':'Carré';if(cropEditing===item.id)showCropEditor();if(!Number.isFinite(d.duration)||d.duration<=0)finish(new Error('Durée vidéo inconnue'));else finish()};v.onerror=()=>finish(new Error('Format non lisible'));v.src=item.url})}
 function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
 function seek(v,t){return new Promise((resolve,reject)=>{if(Math.abs(v.currentTime-t)<.04){resolve();return}const timer=setTimeout(()=>{v.removeEventListener('seeked',done);reject(new Error('Recherche vidéo trop lente'))},9000);function done(){clearTimeout(timer);resolve()}v.addEventListener('seeked',done,{once:true});v.currentTime=t})}
 // Effets 2D sans bibliothèque externe. Tous les pixels restent sur l'appareil.
 function cover(ctx,v,x,y,w,h,scale=1){
  if(!v||v.readyState<2||!v.videoWidth)return false;
- const vw=v.videoWidth,vh=v.videoHeight,ratio=Math.max(w/vw,h/vh)*scale*cropZoom;
+ const s=settings(clipOwners.get(v));
+ const vw=v.videoWidth,vh=v.videoHeight,ratio=Math.max(w/vw,h/vh)*scale*s.zoom;
  const sw=Math.min(vw,w/ratio),sh=Math.min(vh,h/ratio);
- const sx=(vw-sw)/2,sy=(vh-sh)*cropVertical;
+ const sx=(vw-sw)/2,sy=(vh-sh)*s.vertical;
  ctx.drawImage(v,sx,sy,sw,sh,x,y,w,h);
  return true;
 }
@@ -164,8 +198,8 @@ function drawTransition(ctx,w,h,elapsed,transition){
 async function openSecondary(item){const v=document.createElement('video');v.muted=true;v.playsInline=true;v.preload='auto';try{await openClip(v,item);await seek(v,Math.random()*Math.max(0,item.duration-2));await Promise.race([v.play(),new Promise((_,reject)=>setTimeout(()=>reject(new Error('Secondaire lente')),3000))]);return v}catch(_){disposeClip(v);return null}}
 function getMime(){if(!window.MediaRecorder)return null;return ['video/mp4;codecs=avc1.42E01E','video/mp4','video/webm;codecs=vp8','video/webm'].find(x=>MediaRecorder.isTypeSupported(x))||null}
 // iOS peut fournir les métadonnées sans jamais émettre loadeddata.
-function openClip(v,item){return new Promise((resolve,reject)=>{let settled=false;const timer=setTimeout(()=>done(new Error('Chargement trop long')),10000);function done(err){if(settled)return;settled=true;clearTimeout(timer);v.removeEventListener('loadeddata',ready);v.removeEventListener('canplay',ready);v.removeEventListener('error',bad);err?reject(err):resolve()}function ready(){done()}function bad(){done(new Error('Décodage impossible'))}v.addEventListener('loadeddata',ready);v.addEventListener('canplay',ready);v.addEventListener('error',bad);v.src=item.url;v.load();if(v.readyState>=2)done()})}
-function disposeClip(v){if(!v)return;v.pause();v.removeAttribute('src');v.load()}
+function openClip(v,item){return new Promise((resolve,reject)=>{let settled=false;const timer=setTimeout(()=>done(new Error('Chargement trop long')),10000);function done(err){if(settled)return;settled=true;clearTimeout(timer);v.removeEventListener('loadeddata',ready);v.removeEventListener('canplay',ready);v.removeEventListener('error',bad);err?reject(err):resolve()}function ready(){done()}function bad(){done(new Error('Décodage impossible'))}v.addEventListener('loadeddata',ready);v.addEventListener('canplay',ready);v.addEventListener('error',bad);clipOwners.set(v,item);v.src=item.url;v.load();if(v.readyState>=2)done()})}
+function disposeClip(v){if(!v)return;clipOwners.delete(v);v.pause();v.removeAttribute('src');v.load()}
 $('cancel').onclick=()=>{cancelled=true;status('Annulation en cours…')};
 $('make').onclick=async()=>{if(rendering)return;if(!items.length){status('Sélectionne d’abord tes vidéos.');return}const target=$('duration').value==='custom'?Number($('custom').value):Number($('duration').value);if(!Number.isFinite(target)||target<5||target>600){status('Choisis une durée entre 5 et 600 secondes.');return}const mime=getMime();if(!mime){status('Export non pris en charge par cette version de Safari. La lecture aléatoire reste disponible.');return}if(!$('canvas').captureStream){status('Capture vidéo non disponible sur ce navigateur.');return}rendering=true;cancelled=false;$('make').disabled=true;$('cancel').disabled=false;$('progress').value=0;$('download').style.display='none';$('preview').style.display='none';if(exportURL){URL.revokeObjectURL(exportURL);exportURL=null}let stream,live=null,secondary=null;try{status('Analyse des fichiers…');const good=[];for(const item of items){try{good.push(await metadata(item))}catch(e){console.warn(item.file.name,e)}}if(!good.length)throw new Error('Aucune vidéo compatible avec Safari. Essaie des MP4/H.264.');const canvas=$('canvas'),ctx=canvas.getContext('2d');stream=canvas.captureStream(24);const chunks=[];recorder=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:2500000});const finished=new Promise((resolve,reject)=>{recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};recorder.onerror=()=>reject(new Error('Échec de l’enregistrement'));recorder.onstop=()=>resolve()});recorder.start(1000);let elapsed=0;let bag=[];const mode=$('style').value;status('Montage spectaculaire en cours… garde Safari ouvert.');let failed=new Set(),consecutiveFailures=0;
 while(elapsed<target&&!cancelled){
