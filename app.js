@@ -3,6 +3,20 @@ const $=id=>document.getElementById(id);
 // Lecture sans contrôles natifs ni son, y compris après échange des lecteurs.
 function configurePlayback(v){v.controls=false;v.muted=true;v.defaultMuted=true;v.playsInline=true;v.setAttribute('playsinline','');v.setAttribute('webkit-playsinline','');v.disablePictureInPicture=true;}
 
+// Recadrage commun à la lecture et au rendu exporté. Aucun traitement distant.
+let cropZoom=1,cropVertical=.5;
+function updateCrop(){
+ cropZoom=Number($('cropzoom').value)/100;
+ cropVertical=Number($('cropvertical').value)/100;
+ $('cropzoom-label').textContent=cropZoom.toFixed(2).replace('.',',')+'×';
+ $('cropvertical-label').textContent=Math.round(cropVertical*100)+' %';
+ const stage=$('playback-stage');
+ stage.style.setProperty('--crop-zoom',String(cropZoom));
+ stage.style.setProperty('--crop-position',String(cropVertical*100)+'%');
+}
+$('cropzoom').addEventListener('input',updateCrop);
+$('cropvertical').addEventListener('input',updateCrop);
+updateCrop();
 let items=[],queue=[],current=null,playing=false,rendering=false,cancelled=false,recorder=null,exportURL=null;
 const urls=new Set();
 function status(s){$('exportstatus').textContent=s}
@@ -51,7 +65,20 @@ async function next(){
  });
  if(token!==transitionToken)return;
  if(!ready){newV.pause();newV.removeAttribute('src');newV.load();transitionBusy=false;$('now').textContent='Vidéo indisponible : '+item.file.name+' — essaie Suivante';return}
- try{await newV.play()}catch(_){/* Safari peut imposer un geste pour démarrer */}
+ try{
+  await newV.play();
+  if(newV.paused)throw new Error('Lecture en pause');
+ }catch(_){
+  if(token!==transitionToken)return;
+  newV.pause();newV.removeAttribute('src');newV.load();
+  transitionBusy=false;
+  $('now').textContent='Lecture bloquée par iOS : appuie sur Suivante pour réessayer.';
+  return;
+ }
+ // Quand possible, ignorer l'image initiale du site avant de rendre le lecteur visible.
+ if(Number.isFinite(newV.duration)&&newV.duration>1.2&&newV.currentTime<.12){
+  try{newV.currentTime=.12}catch(_){}
+ }
  if(token!==transitionToken)return;
  const duration=1050;
  const initial={fade:'scale(1)',slide:'translateX(100%)',zoom:'scale(1.5)',rotate:'rotate(24deg) scale(.65)',wipe:'scale(1)'}[kind];
@@ -96,7 +123,14 @@ function metadata(item){return new Promise((resolve,reject)=>{const v=document.c
 function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
 function seek(v,t){return new Promise((resolve,reject)=>{if(Math.abs(v.currentTime-t)<.04){resolve();return}const timer=setTimeout(()=>{v.removeEventListener('seeked',done);reject(new Error('Recherche vidéo trop lente'))},9000);function done(){clearTimeout(timer);resolve()}v.addEventListener('seeked',done,{once:true});v.currentTime=t})}
 // Effets 2D sans bibliothèque externe. Tous les pixels restent sur l'appareil.
-function cover(ctx,v,x,y,w,h,scale=1){if(!v||v.readyState<2||!v.videoWidth)return false;const r=Math.max(w/v.videoWidth,h/v.videoHeight)*scale;const dw=v.videoWidth*r,dh=v.videoHeight*r;ctx.drawImage(v,x+(w-dw)/2,y+(h-dh)/2,dw,dh);return true}
+function cover(ctx,v,x,y,w,h,scale=1){
+ if(!v||v.readyState<2||!v.videoWidth)return false;
+ const vw=v.videoWidth,vh=v.videoHeight,ratio=Math.max(w/vw,h/vh)*scale*cropZoom;
+ const sw=Math.min(vw,w/ratio),sh=Math.min(vh,h/ratio);
+ const sx=(vw-sw)/2,sy=(vh-sh)*cropVertical;
+ ctx.drawImage(v,sx,sy,sw,sh,x,y,w,h);
+ return true;
+}
 function contain(ctx,v,x,y,w,h){if(!v||v.readyState<2||!v.videoWidth)return false;const r=Math.min(w/v.videoWidth,h/v.videoHeight);const dw=v.videoWidth*r,dh=v.videoHeight*r;ctx.drawImage(v,x+(w-dw)/2,y+(h-dh)/2,dw,dh);return true}
 const effects=['normal','zoom','mirror','rotate','tint','inset','mosaic','split','stripes'];
 function chooseEffect(){return effects[Math.floor(Math.random()*effects.length)]}
@@ -142,8 +176,8 @@ while(elapsed<target&&!cancelled){
   live=document.createElement('video');live.muted=true;live.playsInline=true;live.preload='auto';
   await openClip(live,item);
   const remaining=target-elapsed;
-  const length=Math.min(remaining,mode==='cuts'?1+Math.random()*2:item.duration,item.duration);
-  const start=mode==='cuts'?Math.random()*Math.max(0,item.duration-length):0;
+  const length=Math.min(remaining,mode==='cuts'?1+Math.random()*2:Math.max(.1,item.duration-(item.duration>1.2?.12:0)),item.duration);
+  const start=mode==='cuts'?Math.random()*Math.max(0,item.duration-length):(item.duration>1.2?.12:0);
   await seek(live,start);
   const effect=chooseEffect();const transition=['fade','flash','wipe'][Math.floor(Math.random()*3)];
   // Une deuxième source est facultative : si son décodage échoue, le montage continue.
