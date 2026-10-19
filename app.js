@@ -209,12 +209,75 @@ function drawTransition(ctx,w,h,elapsed,transition){
  else{ctx.fillStyle='rgba(0,0,0,'+(.8*(1-t))+')';ctx.fillRect(0,0,w,h)}ctx.restore()
 }
 async function openSecondary(item){const v=document.createElement('video');v.muted=true;v.playsInline=true;v.preload='auto';try{await openClip(v,item);await seek(v,Math.random()*Math.max(0,item.duration-2));await Promise.race([v.play(),new Promise((_,reject)=>setTimeout(()=>reject(new Error('Secondaire lente')),3000))]);return v}catch(_){disposeClip(v);return null}}
+
+// V1.3.2 — Analyse locale d'images : mouvement + icône de lecture superposée.
+// Heuristique, sans reconnaissance réseau et sans promesse de détection parfaite.
+const motionCanvas=document.createElement('canvas');motionCanvas.width=96;motionCanvas.height=96;
+const motionCtx=motionCanvas.getContext('2d',{willReadFrequently:true});
+async function motionFrame(v){
+ if(v.readyState<2||!v.videoWidth)return null;
+ try{motionCtx.drawImage(v,0,0,96,96);const d=motionCtx.getImageData(0,0,96,96).data;
+  const pixels=new Uint8Array(96*96);
+  for(let i=0;i<pixels.length;i++)pixels[i]=(d[i*4]*3+d[i*4+1]*6+d[i*4+2])/10;
+  return pixels;
+ }catch(_){return null}
+}
+function motionDifference(a,b){if(!a||!b)return null;let sum=0,changed=0;
+ for(let i=0;i<a.length;i+=4){const delta=Math.abs(a[i]-b[i]);sum+=delta;if(delta>9)changed++}
+ return Math.max(sum/(a.length/4),changed/(a.length/4)*15);
+}
+// Repère une icône ▶ contrastée et approximativement triangulaire au centre.
+// Exige que la forme apparaisse sur plusieurs lignes, pas seulement un point clair.
+function hasCenterPlayIcon(p){
+ if(!p)return false;
+ const W=96, cx=48,cy=48;
+ for(const polarity of [1,-1]){
+  let hits=0,rows=0;
+  for(let y=cy-13;y<=cy+13;y+=3){
+   let match=0,total=0;
+   for(let x=cx-14;x<=cx+14;x+=2){
+    const edge=p[y*W+x], bg=p[y*W+Math.max(0,cx-24)];
+    const bright=polarity*(edge-bg)>35;
+    const inside=x>=cx-8&&x<=cx+12-Math.abs(y-cy)*.6;
+    if(inside){total++;if(bright)match++}
+   }
+   if(total>=3&&match/total>.65){hits++;rows++}
+  }
+  if(hits>=6)return true;
+ }
+ return false;
+}
+async function findMovingStart(v,item,needed){
+ const maxStart=Math.max(.12,item.duration-needed-.05);
+ if(maxStart<=.12)return .12;
+ const tries=Math.min(10,Math.max(4,Math.ceil(item.duration/2)));
+ let best=.12,bestScore=-Infinity;
+ for(let n=0;n<tries&&!cancelled;n++){
+  const start=.12+Math.random()*Math.max(0,maxStart-.12);
+  try{
+   // Échantillons répartis sur le passage, pour rejeter une pause à l'intérieur.
+   const aTime=start,bTime=Math.min(item.duration-.03,start+Math.min(.32,needed*.3));
+   const cTime=Math.min(item.duration-.02,start+Math.min(Math.max(.6,needed*.75),Math.max(.6,needed-.06)));
+   await seek(v,aTime);const a=await motionFrame(v);
+   await seek(v,bTime);const b=await motionFrame(v);
+   await seek(v,cTime);const c=await motionFrame(v);
+   const m1=motionDifference(a,b),m2=motionDifference(b,c);
+   if(m1===null||m2===null)continue;
+   const overlay=[a,b,c].filter(hasCenterPlayIcon).length;
+   const score=Math.min(m1,m2)*2+Math.max(m1,m2)*.3-overlay*30;
+   if(score>bestScore){bestScore=score;best=start}
+   if(m1>=4.5&&m2>=4.5&&overlay===0)return start;
+  }catch(_){continue}
+ }
+ // Si aucun passage satisfaisant n'est trouvé, le meilleur reste un compromis.
+ return best;
+}
 function getMime(){if(!window.MediaRecorder)return null;return ['video/mp4;codecs=avc1.42E01E','video/mp4','video/webm;codecs=vp8','video/webm'].find(x=>MediaRecorder.isTypeSupported(x))||null}
 // iOS peut fournir les métadonnées sans jamais émettre loadeddata.
 function openClip(v,item){return new Promise((resolve,reject)=>{let settled=false;const timer=setTimeout(()=>done(new Error('Chargement trop long')),10000);function done(err){if(settled)return;settled=true;clearTimeout(timer);v.removeEventListener('loadeddata',ready);v.removeEventListener('canplay',ready);v.removeEventListener('error',bad);err?reject(err):resolve()}function ready(){done()}function bad(){done(new Error('Décodage impossible'))}v.addEventListener('loadeddata',ready);v.addEventListener('canplay',ready);v.addEventListener('error',bad);clipOwners.set(v,item);v.src=item.url;v.load();if(v.readyState>=2)done()})}
 function disposeClip(v){if(!v)return;clipOwners.delete(v);v.pause();v.removeAttribute('src');v.load()}
 $('cancel').onclick=()=>{cancelled=true;status('Annulation en cours…')};
-$('make').onclick=async()=>{if(rendering)return;if(!items.length){status('Sélectionne d’abord tes vidéos.');return}const target=$('duration').value==='custom'?Number($('custom').value):Number($('duration').value);if(!Number.isFinite(target)||target<5||target>600){status('Choisis une durée entre 5 et 600 secondes.');return}const mime=getMime();if(!mime){status('Export non pris en charge par cette version de Safari. La lecture aléatoire reste disponible.');return}if(!$('canvas').captureStream){status('Capture vidéo non disponible sur ce navigateur.');return}rendering=true;cancelled=false;$('make').disabled=true;$('cancel').disabled=false;$('progress').value=0;$('download').style.display='none';$('preview').style.display='none';if(exportURL){URL.revokeObjectURL(exportURL);exportURL=null}let stream,live=null,secondary=null;try{status('Analyse des fichiers…');const good=[];for(const item of items){try{good.push(await metadata(item))}catch(e){console.warn(item.file.name,e)}}if(!good.length)throw new Error('Aucune vidéo compatible avec Safari. Essaie des MP4/H.264.');const canvas=$('canvas'),ctx=canvas.getContext('2d');stream=canvas.captureStream(24);const chunks=[];recorder=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:2500000});const finished=new Promise((resolve,reject)=>{recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};recorder.onerror=()=>reject(new Error('Échec de l’enregistrement'));recorder.onstop=()=>resolve()});recorder.start(1000);let elapsed=0;let bag=[];const mode=$('style').value;status('Montage spectaculaire en cours… garde Safari ouvert.');let failed=new Set(),consecutiveFailures=0;
+$('make').onclick=async()=>{if(rendering)return;if(!items.length){status('Sélectionne d’abord tes vidéos.');return}const target=$('duration').value==='custom'?Number($('custom').value):Number($('duration').value);if(!Number.isFinite(target)||target<5||target>600){status('Choisis une durée entre 5 et 600 secondes.');return}const mime=getMime();if(!mime){status('Export non pris en charge par cette version de Safari. La lecture aléatoire reste disponible.');return}if(!$('canvas').captureStream){status('Capture vidéo non disponible sur ce navigateur.');return}rendering=true;cancelled=false;$('make').disabled=true;$('cancel').disabled=false;$('progress').value=0;$('download').style.display='none';$('preview').style.display='none';if(exportURL){URL.revokeObjectURL(exportURL);exportURL=null}let stream,live=null,secondary=null;try{status('Analyse des fichiers…');const good=[];for(const item of items){try{good.push(await metadata(item))}catch(e){console.warn(item.file.name,e)}}if(!good.length)throw new Error('Aucune vidéo compatible avec Safari. Essaie des MP4/H.264.');const canvas=$('canvas'),ctx=canvas.getContext('2d');stream=canvas.captureStream(24);const chunks=[];recorder=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:2500000});const finished=new Promise((resolve,reject)=>{recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};recorder.onerror=()=>reject(new Error('Échec de l’enregistrement'));recorder.onstop=()=>resolve()});recorder.start(1000);let elapsed=0;let bag=[];const mode=$('style').value;status('Montage : recherche de passages animés, contrôle des icônes de pause et ralentis aléatoires… garde Safari ouvert.');let failed=new Set(),consecutiveFailures=0;
 while(elapsed<target&&!cancelled){
  if(!bag.length)bag=shuffle(good.filter(x=>!failed.has(x.url)));
  if(!bag.length)throw new Error('Aucun extrait exportable. Les fichiers MOV/HEVC peuvent être lisibles mais non exportables dans Safari.');
@@ -223,16 +286,25 @@ while(elapsed<target&&!cancelled){
   live=document.createElement('video');live.muted=true;live.playsInline=true;live.preload='auto';
   await openClip(live,item);
   const remaining=target-elapsed;
-  const length=Math.min(remaining,mode==='cuts'?1+Math.random()*2:Math.max(.1,item.duration-(item.duration>1.2?.12:0)),item.duration);
-  const start=mode==='cuts'?Math.random()*Math.max(0,item.duration-length):(item.duration>1.2?.12:0);
+  const speed=[1,1,1,.75,.5,.25][Math.floor(Math.random()*6)];
+  // La durée cible est celle du montage ; à 0,5× on consomme deux fois moins de source.
+  const wanted=Math.min(remaining,mode==='cuts'?1+Math.random()*2:Math.max(.2,item.duration/speed));
+  const length=Math.min(wanted,Math.max(.1,(item.duration-.15)/speed));
+  const start=await findMovingStart(live,item,length*speed);
   await seek(live,start);
+  live.playbackRate=speed;live.defaultPlaybackRate=speed;
   const effect=chooseEffect();const transition=['fade','flash','wipe'][Math.floor(Math.random()*3)];
   // Une deuxième source est facultative : si son décodage échoue, le montage continue.
   if(['mosaic','split','inset'].includes(effect)&&good.length>1){const candidates=good.filter(x=>x.url!==item.url&&!failed.has(x.url));if(candidates.length)secondary=await openSecondary(candidates[Math.floor(Math.random()*candidates.length)])}
   await Promise.race([live.play(),new Promise((_,reject)=>setTimeout(()=>reject(new Error('Démarrage trop long')),8000))]);
-  const startTime=performance.now();let frames=0;
+  const startTime=performance.now();let frames=0;let lastSourceTime=live.currentTime;let lastAdvance=performance.now();
   while(!cancelled){const t=(performance.now()-startTime)/1000;if(t>=length||live.ended)break;
-   if(live.readyState>=2){drawEffect(ctx,live,secondary,canvas.width,canvas.height,effect,t,length);drawTransition(ctx,canvas.width,canvas.height,t,transition);frames++}
+   if(live.readyState>=2){
+    if(live.currentTime>lastSourceTime+.012){lastSourceTime=live.currentTime;lastAdvance=performance.now()}
+    // Si le décodeur reste bloqué sur une image, quitter ce passage au lieu de l'exporter en boucle.
+    if(performance.now()-lastAdvance>850&&t>.9)break;
+    drawEffect(ctx,live,secondary,canvas.width,canvas.height,effect,t,length);drawTransition(ctx,canvas.width,canvas.height,t,transition);frames++
+   }
    $('progress').value=Math.min(100,(elapsed+t)/target*100);await sleep(33)}
   if(!cancelled&&frames===0)throw new Error('Aucune image décodée');
   elapsed+=Math.min(length,(performance.now()-startTime)/1000);
