@@ -2,6 +2,17 @@
 const $=id=>document.getElementById(id);
 // Lecture sans contrôles natifs ni son, y compris après échange des lecteurs.
 function configurePlayback(v){v.controls=false;v.muted=true;v.defaultMuted=true;v.playsInline=true;v.setAttribute('playsinline','');v.setAttribute('webkit-playsinline','');v.disablePictureInPicture=true;}
+// V1.3.0 : vitesse locale appliquée aux deux lecteurs et aux transitions.
+let playbackSpeed=1;
+function applyPlaybackSpeed(v){v.defaultPlaybackRate=playbackSpeed;v.playbackRate=playbackSpeed;}
+function updatePlaybackSpeed(){
+ playbackSpeed=Number($('speed').value);
+ if(![1,.75,.5,.25].includes(playbackSpeed))playbackSpeed=1;
+ $('speed-label').textContent=playbackSpeed===1?'Normale (1×)':playbackSpeed.toLocaleString('fr-FR')+'×';
+ applyPlaybackSpeed(activeVideo());applyPlaybackSpeed(standbyVideo());
+}
+$('speed').addEventListener('change',updatePlaybackSpeed);
+
 
 // V1.2.8 : cadrage par fichier, sans stockage des vidéos ni envoi réseau.
 // Le cadrage par défaut sert aux fichiers ajoutés ensuite.
@@ -62,7 +73,7 @@ function resetPlaybackTransition(){
  transitionToken++;transitionBusy=false;
  if(transitionTimeout){clearTimeout(transitionTimeout);transitionTimeout=null}
  const a=activeVideo(),b=standbyVideo();configurePlayback(a);configurePlayback(b);
- for(const v of [a,b]){v.classList.remove('mix-in','mix-out');v.style.removeProperty('--mix-start');v.style.removeProperty('clip-path');v.style.removeProperty('transition');v.style.removeProperty('transform');v.style.removeProperty('opacity')}
+ for(const v of [a,b]){applyPlaybackSpeed(v);v.classList.remove('mix-in','mix-out');v.style.removeProperty('--mix-start');v.style.removeProperty('clip-path');v.style.removeProperty('transition');v.style.removeProperty('transform');v.style.removeProperty('opacity')}
  clipOwners.delete(b);b.pause();b.removeAttribute('src');b.load();b.style.opacity='0';b.style.pointerEvents='none';
  a.style.opacity='1';a.style.pointerEvents='auto';
 }
@@ -76,7 +87,7 @@ function commitSwap(oldV,newV,item,token){
  oldV.id='player-next';newV.id='player';
  oldV.className='mix-video standby';newV.className='mix-video';
  oldV.style.cssText='opacity:0;pointer-events:none';newV.style.cssText='opacity:1;pointer-events:auto';
- configurePlayback(newV);configurePlayback(oldV);clipOwners.set(newV,item);clipOwners.delete(oldV);applyCropToVideo(newV,item);current=item;transitionBusy=false;transitionTimeout=null;
+ configurePlayback(newV);configurePlayback(oldV);applyPlaybackSpeed(newV);applyPlaybackSpeed(oldV);clipOwners.set(newV,item);clipOwners.delete(oldV);applyCropToVideo(newV,item);current=item;transitionBusy=false;transitionTimeout=null;
  $('now').textContent='Lecture : '+item.file.name;cropEditing=item.id;$('crop-target').value=item.id;showCropEditor();
 }
 async function next(){
@@ -85,7 +96,7 @@ async function next(){
  if(transitionTimeout){clearTimeout(transitionTimeout);transitionTimeout=null}
  transitionBusy=true;
  const oldV=activeVideo(),newV=standbyVideo(),item=nextItem();
- newV.pause();clipOwners.set(newV,item);applyCropToVideo(newV,item);newV.src=item.url;newV.muted=true;newV.playsInline=true;newV.controls=false;
+ newV.pause();clipOwners.set(newV,item);applyCropToVideo(newV,item);newV.src=item.url;newV.muted=true;newV.playsInline=true;newV.controls=false;applyPlaybackSpeed(newV);
  const kind=transitions[Math.floor(Math.random()*transitions.length)];
  $('now').textContent='Préparation de la transition '+kind+'…';
  const ready=await new Promise(resolve=>{
@@ -133,7 +144,7 @@ async function next(){
 $('play').onclick=()=>{playing=true;if(!activeVideo().src)next();else activeVideo().play().catch(()=>next())};
 $('next').onclick=()=>{playing=true;next()};
 $('stop').onclick=()=>{playing=false;resetPlaybackTransition();activeVideo().pause()};
-for(const v of [activeVideo(),standbyVideo()]){configurePlayback(v);
+for(const v of [activeVideo(),standbyVideo()]){configurePlayback(v);applyPlaybackSpeed(v);
  v.addEventListener('ended',()=>{if(playing&&!transitionBusy&&v===activeVideo())next()});
  v.addEventListener('error',()=>{if(playing&&!transitionBusy&&v===activeVideo()){$('now').textContent='Impossible de lire ce fichier. Appuie sur Suivante.'}});
 }
