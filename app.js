@@ -247,31 +247,63 @@ function hasCenterPlayIcon(p){
  }
  return false;
 }
+// V1.3.4 : interface complète du lecteur (centre + sauts gauche/droite).
+// Indice visuel approximatif : deux commandes latérales symétriques, fortement
+// contrastées par rapport à leur voisinage. Une image seule n'est pas une preuve.
+function localContrast(p,cx,cy,r=9){
+ if(!p)return 0;
+ let inner=0,outer=0,ni=0,no=0;
+ for(let y=Math.max(1,cy-r-5);y<Math.min(95,cy+r+6);y+=2)
+  for(let x=Math.max(1,cx-r-5);x<Math.min(95,cx+r+6);x+=2){
+   const d=Math.hypot(x-cx,y-cy),v=p[y*96+x];
+   if(d<r*.65){inner+=v;ni++}else if(d>r*.85&&d<r+5){outer+=v;no++}
+  }
+ return ni&&no?Math.abs(inner/ni-outer/no):0;
+}
+function hasPlayerControls(p){
+ if(hasCenterPlayIcon(p))return true;
+ if(!p)return false;
+ // Les deux boutons ±10 sont souvent situés symétriquement autour du centre.
+ // Exiger les deux limite les faux positifs sur une scène ordinaire.
+ const pairs=[[27,69],[24,72],[31,65],[20,76]];
+ for(const [left,right] of pairs){
+  for(const y of [43,48,53]){
+   if(localContrast(p,left,y)>22&&localContrast(p,right,y)>22&&localContrast(p,48,48)>10)return true;
+  }
+ }
+ return false;
+}
+async function scanWindow(v,start,span){
+ const times=[0,.12,.25,.38,.5,.62,.75,.88,1];
+ let frames=[],controls=0,minMotion=Infinity;
+ for(const fraction of times){
+  if(cancelled)return {ok:false,score:-Infinity};
+  await seek(v,Math.min(v.duration-.035,start+span*fraction));
+  const frame=await motionFrame(v);
+  if(!frame)return {ok:false,score:-Infinity};
+  frames.push(frame);if(hasPlayerControls(frame))controls++;
+ }
+ for(let i=1;i<frames.length;i++){
+  const m=motionDifference(frames[i-1],frames[i]);
+  if(m!==null)minMotion=Math.min(minMotion,m);
+ }
+ // Refuser les commandes même si la vidéo bouge sous l'interface.
+ return {ok:controls===0&&minMotion>1.8,score:minMotion-controls*70,controls};
+}
 async function findMovingStart(v,item,needed){
  const maxStart=Math.max(.12,item.duration-needed-.05);
- if(maxStart<=.12)return .12;
- const tries=Math.min(16,Math.max(7,Math.ceil(item.duration/1.5)));
- let best=.12,bestScore=-Infinity;
+ if(maxStart<=.12)return null;
+ const tries=Math.min(22,Math.max(10,Math.ceil(item.duration/1.2)));
+ let best=null,bestScore=-Infinity;
  for(let n=0;n<tries&&!cancelled;n++){
   const start=.12+Math.random()*Math.max(0,maxStart-.12);
   try{
-   // Échantillons répartis sur le passage, pour rejeter une pause à l'intérieur.
-   const aTime=start,bTime=Math.min(item.duration-.03,start+Math.min(.28,needed*.23));
-   const cTime=Math.min(item.duration-.02,start+Math.min(Math.max(.5,needed*.6),Math.max(.5,needed-.06)));
-   const dTime=Math.min(item.duration-.02,start+Math.max(.2,needed-.10));
-   await seek(v,aTime);const a=await motionFrame(v);
-   await seek(v,bTime);const b=await motionFrame(v);
-   await seek(v,cTime);const c=await motionFrame(v);
-   await seek(v,dTime);const d=await motionFrame(v);
-   const m1=motionDifference(a,b),m2=motionDifference(b,c),m3=motionDifference(c,d);
-   if(m1===null||m2===null||m3===null)continue;
-   const overlay=[a,b,c,d].filter(hasCenterPlayIcon).length;
-   const score=Math.min(m1,m2,m3)*2+Math.max(m1,m2,m3)*.3-overlay*45;
-   if(score>bestScore){bestScore=score;best=start}
-   if(m1>=4.5&&m2>=4.5&&m3>=4.5&&overlay===0)return start;
+   const result=await scanWindow(v,start,needed);
+   if(result.ok&&result.score>bestScore){best=start;bestScore=result.score}
+   if(result.ok&&result.score>4.5)return start;
   }catch(_){continue}
  }
- // Si aucun passage satisfaisant n'est trouvé, le meilleur reste un compromis.
+ // Pas de repli vers un passage connu comme douteux : autre source.
  return best;
 }
 function getMime(){if(!window.MediaRecorder)return null;return ['video/mp4;codecs=avc1.42E01E','video/mp4','video/webm;codecs=vp8','video/webm'].find(x=>MediaRecorder.isTypeSupported(x))||null}
@@ -279,7 +311,7 @@ function getMime(){if(!window.MediaRecorder)return null;return ['video/mp4;codec
 function openClip(v,item){return new Promise((resolve,reject)=>{let settled=false;const timer=setTimeout(()=>done(new Error('Chargement trop long')),10000);function done(err){if(settled)return;settled=true;clearTimeout(timer);v.removeEventListener('loadeddata',ready);v.removeEventListener('canplay',ready);v.removeEventListener('error',bad);err?reject(err):resolve()}function ready(){done()}function bad(){done(new Error('Décodage impossible'))}v.addEventListener('loadeddata',ready);v.addEventListener('canplay',ready);v.addEventListener('error',bad);clipOwners.set(v,item);v.src=item.url;v.load();if(v.readyState>=2)done()})}
 function disposeClip(v){if(!v)return;clipOwners.delete(v);v.pause();v.removeAttribute('src');v.load()}
 $('cancel').onclick=()=>{cancelled=true;status('Annulation en cours…')};
-$('make').onclick=async()=>{if(rendering)return;if(!items.length){status('Sélectionne d’abord tes vidéos.');return}const target=$('duration').value==='custom'?Number($('custom').value):Number($('duration').value);if(!Number.isFinite(target)||target<5||target>600){status('Choisis une durée entre 5 et 600 secondes.');return}const mime=getMime();if(!mime){status('Export non pris en charge par cette version de Safari. La lecture aléatoire reste disponible.');return}if(!$('canvas').captureStream){status('Capture vidéo non disponible sur ce navigateur.');return}rendering=true;cancelled=false;$('make').disabled=true;$('cancel').disabled=false;$('progress').value=0;$('download').style.display='none';$('preview').style.display='none';if(exportURL){URL.revokeObjectURL(exportURL);exportURL=null}let stream,live=null,secondary=null;try{status('Analyse des fichiers…');const good=[];for(const item of items){try{good.push(await metadata(item))}catch(e){console.warn(item.file.name,e)}}if(!good.length)throw new Error('Aucune vidéo compatible avec Safari. Essaie des MP4/H.264.');const canvas=$('canvas'),ctx=canvas.getContext('2d');stream=canvas.captureStream(24);const chunks=[];recorder=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:4500000});const finished=new Promise((resolve,reject)=>{recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};recorder.onerror=()=>reject(new Error('Échec de l’enregistrement'));recorder.onstop=()=>resolve()});recorder.start(1000);let elapsed=0;let bag=[];const mode=$('style').value;status('Montage : recherche de passages animés, contrôle des icônes de pause et ralentis aléatoires… garde Safari ouvert.');let failed=new Set(),consecutiveFailures=0;
+$('make').onclick=async()=>{if(rendering)return;if(!items.length){status('Sélectionne d’abord tes vidéos.');return}const target=$('duration').value==='custom'?Number($('custom').value):Number($('duration').value);if(!Number.isFinite(target)||target<5||target>600){status('Choisis une durée entre 5 et 600 secondes.');return}const mime=getMime();if(!mime){status('Export non pris en charge par cette version de Safari. La lecture aléatoire reste disponible.');return}if(!$('canvas').captureStream){status('Capture vidéo non disponible sur ce navigateur.');return}rendering=true;cancelled=false;$('make').disabled=true;$('cancel').disabled=false;$('progress').value=0;$('download').style.display='none';$('preview').style.display='none';if(exportURL){URL.revokeObjectURL(exportURL);exportURL=null}let stream,live=null,secondary=null;try{status('Analyse des fichiers…');const good=[];for(const item of items){try{good.push(await metadata(item))}catch(e){console.warn(item.file.name,e)}}if(!good.length)throw new Error('Aucune vidéo compatible avec Safari. Essaie des MP4/H.264.');const canvas=$('canvas'),ctx=canvas.getContext('2d');stream=canvas.captureStream(24);const chunks=[];recorder=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:4500000});const finished=new Promise((resolve,reject)=>{recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};recorder.onerror=()=>reject(new Error('Échec de l’enregistrement'));recorder.onstop=()=>resolve()});recorder.start(1000);let elapsed=0;let bag=[];const mode=$('style').value;status('Montage : vérification renforcée des commandes ▶ et ±10, passages animés et ralentis aléatoires… garde Safari ouvert.');let failed=new Set(),consecutiveFailures=0;
 while(elapsed<target&&!cancelled){
  if(!bag.length)bag=shuffle(good.filter(x=>!failed.has(x.url)));
  if(!bag.length)throw new Error('Aucun extrait exportable. Les fichiers MOV/HEVC peuvent être lisibles mais non exportables dans Safari.');
@@ -293,6 +325,7 @@ while(elapsed<target&&!cancelled){
   const wanted=Math.min(remaining,mode==='cuts'?1+Math.random()*2:Math.max(.2,item.duration/speed));
   const length=Math.min(wanted,Math.max(.1,(item.duration-.15)/speed));
   const start=await findMovingStart(live,item,length*speed);
+  if(start===null){status('Aucun passage suffisamment sûr dans '+item.file.name+' ; autre source…');continue}
   await seek(live,start);
   live.playbackRate=speed;live.defaultPlaybackRate=speed;
   const effect=chooseEffect();const transition=['fade','flash','wipe'][Math.floor(Math.random()*3)];
@@ -300,7 +333,7 @@ while(elapsed<target&&!cancelled){
   if(['mosaic','split','inset'].includes(effect)&&good.length>1){const candidates=good.filter(x=>x.url!==item.url&&!failed.has(x.url));if(candidates.length)secondary=await openSecondary(candidates[Math.floor(Math.random()*candidates.length)])}
   await Promise.race([live.play(),new Promise((_,reject)=>setTimeout(()=>reject(new Error('Démarrage trop long')),8000))]);
   const startTime=performance.now();let frames=0;let lastSourceTime=live.currentTime;let lastAdvance=performance.now();
-  let lastVisualCheck=0,pausedOverlay=false,overlayHits=0;
+  let lastVisualCheck=0,pausedOverlay=false,overlayHits=0,lastMotionSample=null,stillHits=0;
   while(!cancelled){const t=(performance.now()-startTime)/1000;if(t>=length||live.ended)break;
    if(live.readyState>=2){
     if(live.currentTime>lastSourceTime+.012){lastSourceTime=live.currentTime;lastAdvance=performance.now()}
@@ -311,10 +344,17 @@ while(elapsed<target&&!cancelled){
     if(performance.now()-lastVisualCheck>180){
       lastVisualCheck=performance.now();
       const sample=await motionFrame(live);
-      overlayHits=hasCenterPlayIcon(sample)?overlayHits+1:0;
-      pausedOverlay=overlayHits>=2;
+      overlayHits=hasPlayerControls(sample)?overlayHits+1:0;
+      if(lastMotionSample&&sample){const difference=motionDifference(lastMotionSample,sample);stillHits=difference!==null&&difference<.65?stillHits+1:0}
+      lastMotionSample=sample;
+      pausedOverlay=overlayHits>=1||stillHits>=4;
     }
     if(pausedOverlay)break;
+    // Vérification de la deuxième vidéo avant de l'utiliser en mosaïque/encart.
+    if(secondary&&['mosaic','split','inset'].includes(effect)){
+      const side=await motionFrame(secondary);
+      if(hasPlayerControls(side)){disposeClip(secondary);secondary=null}
+    }
     drawEffect(ctx,live,secondary,canvas.width,canvas.height,effect,t,length);drawTransition(ctx,canvas.width,canvas.height,t,transition);frames++
    }
    $('progress').value=Math.min(100,(elapsed+t)/target*100);await sleep(33)}
